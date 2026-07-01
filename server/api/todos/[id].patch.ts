@@ -1,4 +1,5 @@
 import { updateTodoForUser } from '../../utils/todos'
+import { assertMaxLength, MAX_TODO_TITLE_LENGTH } from '../../utils/limits'
 
 export default defineEventHandler(async (event) => {
   const user = requireUser(event)
@@ -12,6 +13,10 @@ export default defineEventHandler(async (event) => {
   }
 
   const body = await readBody<{ title?: string, done?: boolean }>(event)
+  if (body?.title !== undefined) {
+    assertMaxLength(body.title.trim(), MAX_TODO_TITLE_LENGTH, '待办标题')
+  }
+
   const todo = updateTodoForUser(user.id, id, {
     title: body?.title,
     done: body?.done

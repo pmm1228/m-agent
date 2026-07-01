@@ -10,6 +10,7 @@ import {
   tryParseTodoCommand
 } from '../../utils/todos'
 import { chatWithZhipu } from '../../utils/zhipu'
+import { assertMaxLength, MAX_CHAT_MESSAGE_LENGTH, MAX_TODO_TITLE_LENGTH } from '../../utils/limits'
 
 export default defineEventHandler(async (event) => {
   const user = requireUser(event)
@@ -25,6 +26,7 @@ export default defineEventHandler(async (event) => {
       statusMessage: '消息不能为空'
     })
   }
+  assertMaxLength(message, MAX_CHAT_MESSAGE_LENGTH, '消息')
 
   if (!conversationId) {
     throw createError({
@@ -51,6 +53,7 @@ export default defineEventHandler(async (event) => {
   const todoCommand = tryParseTodoCommand(message)
 
   if (todoCommand?.action === 'create') {
+    assertMaxLength(todoCommand.title, MAX_TODO_TITLE_LENGTH, '待办标题')
     const todo = createTodoForUser(user.id, todoCommand.title)
     todoCreated = { id: todo.id, title: todo.title }
     reply = `已添加待办「${todo.title}」。你可以在左侧「待办」页面查看和管理。`

@@ -1,9 +1,11 @@
 import { createConversation } from '../utils/chat'
+import { assertMaxLength, MAX_CONVERSATION_TITLE_LENGTH } from '../utils/limits'
 
 export default defineEventHandler(async (event) => {
   const user = requireUser(event)
   const body = await readBody<{ title?: string }>(event)
   const title = body?.title?.trim() || '新对话'
+  assertMaxLength(title, MAX_CONVERSATION_TITLE_LENGTH, '对话标题')
 
   const conversation = createConversation(user.id, title)
 

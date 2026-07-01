@@ -1,4 +1,5 @@
 import { createTodoForUser } from '../utils/todos'
+import { assertMaxLength, MAX_TODO_TITLE_LENGTH } from '../utils/limits'
 
 export default defineEventHandler(async (event) => {
   const user = requireUser(event)
@@ -11,6 +12,7 @@ export default defineEventHandler(async (event) => {
       statusMessage: 'title 不能为空'
     })
   }
+  assertMaxLength(title, MAX_TODO_TITLE_LENGTH, '待办标题')
 
   const todo = createTodoForUser(user.id, title)
 

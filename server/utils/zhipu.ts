@@ -1,3 +1,5 @@
+import { AI_REQUEST_TIMEOUT_MS } from './limits'
+
 const ZHIPU_API_URL = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
 
 const SYSTEM_PROMPT = `你是 mAgent 中的 AI 助手。请用简洁、准确的中文回答用户问题。
@@ -31,42 +33,57 @@ export async function chatWithZhipu(options: {
   messages: ChatMessageInput[]
   extraSystemContext?: string
 }) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS)
   const systemContent = options.extraSystemContext
     ? `${SYSTEM_PROMPT}\n\n${options.extraSystemContext}`
     : SYSTEM_PROMPT
 
-  const response = await fetch(ZHIPU_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${options.apiKey}`
-    },
-    body: JSON.stringify({
-      model: options.model,
-      messages: [
-        { role: 'system', content: systemContent },
-        ...options.messages
-      ],
-      temperature: 0.7
+  try {
+    const response = await fetch(ZHIPU_API_URL, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${options.apiKey}`
+      },
+      body: JSON.stringify({
+        model: options.model,
+        messages: [
+          { role: 'system', content: systemContent },
+          ...options.messages
+        ],
+        temperature: 0.7
+      })
     })
-  })
 
-  const data = await response.json() as ZhipuResponse
+    const data = await response.json() as ZhipuResponse
 
-  if (!response.ok) {
-    throw createError({
-      statusCode: response.status,
-      statusMessage: data.error?.message || `智谱 AI 请求失败 (${response.status})`
-    })
+    if (!response.ok) {
+      throw createError({
+        statusCode: response.status,
+        statusMessage: data.error?.message || `智谱 AI 请求失败 (${response.status})`
+      })
+    }
+
+    const reply = data.choices?.[0]?.message?.content?.trim()
+    if (!reply) {
+      throw createError({
+        statusCode: 502,
+        statusMessage: '智谱 AI 返回内容为空'
+      })
+    }
+
+    return reply
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw createError({
+        statusCode: 504,
+        statusMessage: '智谱 AI 请求超时，请稍后重试'
+      })
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
   }
-
-  const reply = data.choices?.[0]?.message?.content?.trim()
-  if (!reply) {
-    throw createError({
-      statusCode: 502,
-      statusMessage: '智谱 AI 返回内容为空'
-    })
-  }
-
-  return reply
 }
