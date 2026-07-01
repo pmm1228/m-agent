@@ -1,12 +1,27 @@
-import { createConversation, listConversationsWithMessages } from '../utils/chat'
+import { createConversation, listConversationSummaries } from '../utils/chat'
+
+function serializeLastMessage(conversation: ReturnType<typeof listConversationSummaries>[number]) {
+  if (!conversation.last_message_id || !conversation.last_message_role || !conversation.last_message_created_at) {
+    return null
+  }
+
+  return {
+    id: conversation.last_message_id,
+    role: conversation.last_message_role,
+    content: conversation.last_message_content ?? '',
+    status: conversation.last_message_status ?? 'completed',
+    error: conversation.last_message_error,
+    time: conversation.last_message_created_at
+  }
+}
 
 export default defineEventHandler((event) => {
   const user = requireUser(event)
-  let conversations = listConversationsWithMessages(user.id)
+  let conversations = listConversationSummaries(user.id)
 
   if (conversations.length === 0) {
     createConversation(user.id, '默认对话')
-    conversations = listConversationsWithMessages(user.id)
+    conversations = listConversationSummaries(user.id)
   }
 
   return {
@@ -14,12 +29,8 @@ export default defineEventHandler((event) => {
       id: conversation.id,
       title: conversation.title,
       updatedAt: conversation.updated_at,
-      messages: conversation.messages.map(message => ({
-        id: message.id,
-        role: message.role,
-        content: message.content,
-        time: message.created_at
-      }))
+      messageCount: conversation.message_count,
+      lastMessage: serializeLastMessage(conversation)
     }))
   }
 })

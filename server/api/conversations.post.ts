@@ -18,8 +18,21 @@ export default defineEventHandler(async (event) => {
         id: message.id,
         role: message.role,
         content: message.content,
+        status: message.status,
+        error: message.error,
         time: message.created_at
-      }))
+      })),
+      messageCount: conversation.messages.length,
+      lastMessage: conversation.messages.at(-1)
+        ? {
+            id: conversation.messages.at(-1)!.id,
+            role: conversation.messages.at(-1)!.role,
+            content: conversation.messages.at(-1)!.content,
+            status: conversation.messages.at(-1)!.status,
+            error: conversation.messages.at(-1)!.error,
+            time: conversation.messages.at(-1)!.created_at
+          }
+        : null
     }
   }
 })

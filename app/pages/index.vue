@@ -15,6 +15,8 @@ interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   time: string
+  status?: 'pending' | 'completed' | 'failed'
+  error?: string | null
 }
 
 const quickPrompts = [
@@ -48,13 +50,19 @@ const {
   activeId,
   creating,
   sending,
+  retryingMessageId,
   loadingConversations,
+  loadingMessagesId,
   startNewConversation,
   sendMessage: sendChatMessage,
+  retryMessage,
   canSend
 } = useConversations()
 
 const messages = computed(() => activeConversation.value?.messages ?? [])
+const loadingActiveConversation = computed(() =>
+  loadingConversations.value || (activeId.value !== null && loadingMessagesId.value === activeId.value && messages.value.length === 0)
+)
 
 function parseLocalTime(time: string): Date | null {
   const match = time.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/)
@@ -207,7 +215,7 @@ watch(activeId, () => {
   </header>
 
   <div ref="chatRef" class="messages workspace-scroll">
-    <div v-if="loadingConversations" class="messages__loading">
+    <div v-if="loadingActiveConversation" class="messages__loading">
       正在加载对话…
     </div>
     <div v-else class="messages__inner">
@@ -228,7 +236,27 @@ watch(activeId, () => {
           <div class="msg__body">
             <span v-if="item.msg.role === 'assistant'" class="msg__sender">mAgent</span>
             <div
-              v-if="item.msg.role === 'assistant'"
+              v-if="item.msg.role === 'assistant' && item.msg.status === 'pending'"
+              class="msg__bubble msg__bubble--typing"
+            >
+              <span /><span /><span />
+            </div>
+            <div
+              v-else-if="item.msg.role === 'assistant' && item.msg.status === 'failed'"
+              class="msg__bubble msg__bubble--failed"
+            >
+              <span>{{ item.msg.error || 'AI 回复失败，请稍后重试。' }}</span>
+              <button
+                class="msg__retry"
+                type="button"
+                :disabled="retryingMessageId === item.msg.id || sending"
+                @click="retryMessage(item.msg.id, scrollToBottom)"
+              >
+                {{ retryingMessageId === item.msg.id ? '重试中…' : '重试' }}
+              </button>
+            </div>
+            <div
+              v-else-if="item.msg.role === 'assistant'"
               class="msg__bubble msg__bubble--markdown"
               v-html="renderMarkdown(item.msg.content)"
             />
@@ -271,7 +299,7 @@ watch(activeId, () => {
         class="composer__input"
         placeholder="给 mAgent 发消息…"
         rows="1"
-        :disabled="sending || loadingConversations"
+        :disabled="sending || loadingConversations || Boolean(loadingMessagesId)"
         @keydown.enter.exact.prevent="sendMessage()"
       />
       <button
@@ -538,6 +566,39 @@ watch(activeId, () => {
 
 .msg__bubble--typing span:nth-child(2) { animation-delay: 0.15s; }
 .msg__bubble--typing span:nth-child(3) { animation-delay: 0.3s; }
+
+.msg__bubble--failed {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0.5px solid rgba(255, 59, 48, 0.24);
+  background: rgba(255, 59, 48, 0.08);
+  color: #b42318;
+}
+
+.msg__retry {
+  flex-shrink: 0;
+  min-width: 48px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 59, 48, 0.12);
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.msg__retry:hover:not(:disabled) {
+  background: rgba(255, 59, 48, 0.18);
+}
+
+.msg__retry:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
 
 .chips {
   display: flex;

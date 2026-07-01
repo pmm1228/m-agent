@@ -1,8 +1,12 @@
+export type MessageStatus = 'pending' | 'completed' | 'failed'
+
 export interface ChatMessage {
   id: number
   role: 'user' | 'assistant'
   content: string
   time: string
+  status?: MessageStatus
+  error?: string | null
 }
 
 export interface Conversation {
@@ -10,13 +14,26 @@ export interface Conversation {
   title: string
   messages: ChatMessage[]
   updatedAt: string
+  lastMessage: ChatMessage | null
+  messageCount: number
+  messagesLoaded: boolean
+}
+
+interface ConversationPayload {
+  id: number
+  title: string
+  updatedAt: string
+  messages?: ChatMessage[]
+  lastMessage?: ChatMessage | null
+  messageCount?: number
 }
 
 const ACTIVE_CONVERSATION_KEY = 'magent-active-conversation-id'
 
-type ConversationsResponse = { data: Conversation[] }
+type ConversationsResponse = { data: ConversationPayload[] }
+type ConversationResponse = { data: ConversationPayload }
 
-function extractConversations(payload: ConversationsResponse | Conversation[] | null | undefined) {
+function extractConversations(payload: ConversationsResponse | ConversationPayload[] | null | undefined) {
   if (!payload) {
     return undefined
   }
@@ -28,16 +45,34 @@ function extractConversations(payload: ConversationsResponse | Conversation[] | 
   return payload.data
 }
 
+function normalizeConversation(payload: ConversationPayload, existing?: Conversation): Conversation {
+  const hasMessages = Array.isArray(payload.messages)
+  const messages = hasMessages ? payload.messages! : (existing?.messages ?? [])
+  const lastMessage = payload.lastMessage
+    ?? (hasMessages ? (messages.at(-1) ?? null) : (existing?.lastMessage ?? messages.at(-1) ?? null))
+
+  return {
+    id: payload.id,
+    title: payload.title,
+    updatedAt: payload.updatedAt,
+    messages,
+    lastMessage,
+    messageCount: payload.messageCount ?? (hasMessages ? messages.length : (existing?.messageCount ?? messages.length)),
+    messagesLoaded: hasMessages ? true : (existing?.messagesLoaded ?? false)
+  }
+}
+
 function syncConversationsFromFetch(
   conversations: Ref<Conversation[]>,
   activeId: Ref<number | null>,
-  data: Conversation[] | undefined
+  data: ConversationPayload[] | undefined
 ) {
   if (!data) {
     return
   }
 
-  conversations.value = data
+  const existingById = new Map(conversations.value.map(item => [item.id, item]))
+  conversations.value = data.map(item => normalizeConversation(item, existingById.get(item.id)))
   const ids = new Set(conversations.value.map(item => item.id))
 
   if (import.meta.client) {
@@ -72,6 +107,8 @@ export function useConversations() {
   const creating = useState('conversation-creating', () => false)
   const deletingId = useState<number | null>('conversation-deleting-id', () => null)
   const sending = useState('chat-sending', () => false)
+  const loadingMessagesId = useState<number | null>('conversation-loading-messages-id', () => null)
+  const retryingMessageId = useState<number | null>('chat-retrying-message-id', () => null)
 
   const activeConversation = computed(() =>
     conversations.value.find(item => item.id === activeId.value)
@@ -94,6 +131,47 @@ export function useConversations() {
       activeId,
       extractConversations(conversationData.value)
     )
+  }
+
+  function mergeConversationPayload(payload: ConversationPayload) {
+    const index = conversations.value.findIndex(item => item.id === payload.id)
+    const existing = index === -1 ? undefined : conversations.value[index]
+    const normalized = normalizeConversation(payload, existing)
+
+    if (index === -1) {
+      conversations.value.unshift(normalized)
+    } else {
+      conversations.value[index] = normalized
+    }
+
+    return normalized
+  }
+
+  async function loadConversationMessages(id: number, force = false) {
+    const existing = conversations.value.find(item => item.id === id)
+    if (existing?.messagesLoaded && !force) {
+      return existing
+    }
+
+    if (loadingMessagesId.value === id) {
+      return existing
+    }
+
+    loadingMessagesId.value = id
+    try {
+      const { data } = await $fetch<ConversationResponse>(`/api/conversations/${id}`, {
+        credentials: 'include'
+      })
+      return mergeConversationPayload(data)
+    } catch (error: unknown) {
+      const fetchError = error as { data?: { statusMessage?: string }, statusMessage?: string }
+      ElMessage.error(fetchError.data?.statusMessage || fetchError.statusMessage || '加载消息失败')
+      return existing
+    } finally {
+      if (loadingMessagesId.value === id) {
+        loadingMessagesId.value = null
+      }
+    }
   }
 
   if (import.meta.client && !clientSyncInitialized) {
@@ -119,12 +197,30 @@ export function useConversations() {
         await refreshConversations()
       }
       syncFromFetchPayload()
+      if (activeId.value) {
+        await loadConversationMessages(activeId.value)
+      }
     })
   }
 
   function getConversationPreview(conversation: Conversation) {
-    const last = conversation.messages.at(-1)
-    return last?.content ?? '暂无消息'
+    const last = conversation.messagesLoaded
+      ? (conversation.messages.at(-1) ?? conversation.lastMessage)
+      : (conversation.lastMessage ?? conversation.messages.at(-1))
+
+    if (!last) {
+      return '暂无消息'
+    }
+
+    if (last.status === 'failed') {
+      return '回复失败，点击重试'
+    }
+
+    if (last.status === 'pending') {
+      return '正在生成回复…'
+    }
+
+    return last.content || '暂无消息'
   }
 
   function bumpConversation(conversationId: number) {
@@ -145,14 +241,15 @@ export function useConversations() {
 
     creating.value = true
     try {
-      const { data } = await $fetch<{ data: Conversation }>('/api/conversations', {
+      const { data } = await $fetch<ConversationResponse>('/api/conversations', {
         method: 'POST',
         credentials: 'include',
         body: { title: '新对话' }
       })
 
-      conversations.value.unshift(data)
-      activeId.value = data.id
+      const conversation = normalizeConversation(data)
+      conversations.value.unshift(conversation)
+      activeId.value = conversation.id
       onReady?.()
     } catch (error: unknown) {
       const fetchError = error as { data?: { statusMessage?: string }, statusMessage?: string }
@@ -162,11 +259,13 @@ export function useConversations() {
     }
   }
 
-  function switchConversation(id: number, onReady?: () => void) {
-    if (activeId.value === id || sending.value || deletingId.value) {
+  async function switchConversation(id: number, onReady?: () => void) {
+    if (sending.value || deletingId.value) {
       return
     }
+
     activeId.value = id
+    await loadConversationMessages(id)
     onReady?.()
   }
 
@@ -204,6 +303,7 @@ export function useConversations() {
       if (activeId.value === id) {
         if (conversations.value.length > 0) {
           activeId.value = conversations.value[0].id
+          await loadConversationMessages(activeId.value)
           onReady?.()
         } else {
           activeId.value = null
@@ -228,6 +328,27 @@ export function useConversations() {
 
     conversation.title = title
     conversation.messages.push(userMessage, assistantMessage)
+    conversation.lastMessage = assistantMessage
+    conversation.messageCount += 2
+    conversation.updatedAt = new Date().toISOString()
+    bumpConversation(conversationId)
+  }
+
+  function applyMessageUpdate(conversationId: number, message: ChatMessage) {
+    const conversation = conversations.value.find(item => item.id === conversationId)
+    if (!conversation) {
+      return
+    }
+
+    const index = conversation.messages.findIndex(item => item.id === message.id)
+    if (index !== -1) {
+      conversation.messages[index] = message
+    }
+
+    if (conversation.lastMessage?.id === message.id || conversation.messages.at(-1)?.id === message.id) {
+      conversation.lastMessage = message
+    }
+
     conversation.updatedAt = new Date().toISOString()
     bumpConversation(conversationId)
   }
@@ -239,11 +360,13 @@ export function useConversations() {
     }
 
     if (activeConversation.value) {
+      await loadConversationMessages(activeConversation.value.id)
       return activeConversation.value
     }
 
     if (conversations.value.length > 0) {
       activeId.value = conversations.value[0].id
+      await loadConversationMessages(activeId.value)
       return activeConversation.value
     }
 
@@ -274,6 +397,7 @@ export function useConversations() {
       id: optimisticId,
       role: 'user',
       content,
+      status: 'pending',
       time: new Date().toISOString()
     }
     conversation.messages.push(optimisticUser)
@@ -282,6 +406,7 @@ export function useConversations() {
     try {
       const result = await $fetch<{
         title: string
+        failed?: boolean
         todoCreated?: { id: number, title: string }
         userMessage: ChatMessage
         assistantMessage: ChatMessage
@@ -304,6 +429,9 @@ export function useConversations() {
       }
 
       applyChatResult(conversation.id, result.title, result.userMessage, result.assistantMessage)
+      if (result.failed) {
+        ElMessage.warning(result.assistantMessage.error || 'AI 回复失败，可点击重试')
+      }
       onScroll?.()
     } catch (error: unknown) {
       const optimisticIndex = conversation.messages.findIndex(item => item.id === optimisticId)
@@ -319,8 +447,48 @@ export function useConversations() {
     }
   }
 
+  async function retryMessage(messageId: number, onScroll?: () => void) {
+    if (retryingMessageId.value || sending.value) {
+      return
+    }
+
+    const conversation = activeConversation.value
+    const message = conversation?.messages.find(item => item.id === messageId)
+    if (!conversation || !message || message.role !== 'assistant' || message.status !== 'failed') {
+      return
+    }
+
+    retryingMessageId.value = messageId
+    const previous = { ...message }
+    message.status = 'pending'
+    message.error = null
+    onScroll?.()
+
+    try {
+      const result = await $fetch<{
+        failed?: boolean
+        assistantMessage: ChatMessage
+      }>(`/api/messages/${messageId}/retry`, {
+        method: 'POST',
+        credentials: 'include'
+      })
+
+      applyMessageUpdate(conversation.id, result.assistantMessage)
+      if (result.failed) {
+        ElMessage.warning(result.assistantMessage.error || '重试失败，请稍后再试')
+      }
+      onScroll?.()
+    } catch (error: unknown) {
+      applyMessageUpdate(conversation.id, previous)
+      const fetchError = error as { data?: { statusMessage?: string }, statusMessage?: string }
+      ElMessage.error(fetchError.data?.statusMessage || fetchError.statusMessage || '重试失败')
+    } finally {
+      retryingMessageId.value = null
+    }
+  }
+
   const canSend = computed(() =>
-    !sending.value && !loadingConversations.value && !creating.value
+    !sending.value && !loadingConversations.value && !loadingMessagesId.value && !creating.value
   )
 
   return {
@@ -330,14 +498,18 @@ export function useConversations() {
     creating,
     deletingId,
     sending,
+    retryingMessageId,
     loadingConversations,
+    loadingMessagesId,
     refreshConversations,
+    loadConversationMessages,
     getConversationPreview,
     startNewConversation,
     switchConversation,
     deleteConversation,
     applyChatResult,
     sendMessage,
+    retryMessage,
     canSend
   }
 }
