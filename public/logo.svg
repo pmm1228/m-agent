@@ -1,0 +1,12 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Compact Sea Peak Logo</title>
+  <desc id="desc">A compact m-shaped sea peak logo using similar acute triangles and a short connected sea line.</desc>
+  <defs>
+    <linearGradient id="ridgeGradient" x1="144" y1="121" x2="419" y2="383" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5CFFD5"/>
+      <stop offset="0.56" stop-color="#1DE891"/>
+      <stop offset="1" stop-color="#22CFEF"/>
+    </linearGradient>
+  </defs>
+  <path d="M144 351L200 175L262 351L346 121L419 351V383H355" stroke="url(#ridgeGradient)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
