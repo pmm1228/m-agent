@@ -236,7 +236,7 @@ watch(activeId, () => {
           <div class="msg__body">
             <span v-if="item.msg.role === 'assistant'" class="msg__sender">mAgent</span>
             <div
-              v-if="item.msg.role === 'assistant' && item.msg.status === 'pending'"
+              v-if="item.msg.role === 'assistant' && item.msg.status === 'pending' && !item.msg.content"
               class="msg__bubble msg__bubble--typing"
             >
               <span /><span /><span />
@@ -258,24 +258,21 @@ watch(activeId, () => {
             <div
               v-else-if="item.msg.role === 'assistant'"
               class="msg__bubble msg__bubble--markdown"
-              v-html="renderMarkdown(item.msg.content)"
-            />
+              :class="{ 'msg__bubble--streaming': item.msg.status === 'pending' && Boolean(item.msg.content) }"
+            >
+              <div class="msg__markdown-content" v-html="renderMarkdown(item.msg.content)" />
+              <span
+                v-if="item.msg.status === 'pending' && item.msg.content"
+                class="msg__typing-cursor"
+                aria-hidden="true"
+              />
+            </div>
             <div v-else class="msg__bubble msg__bubble--plain">{{ item.msg.content }}</div>
             <time class="msg__time">{{ formatMessageTime(item.msg.time) }}</time>
           </div>
         </article>
       </template>
 
-      <article v-if="sending" class="msg msg--assistant msg--typing">
-        <div class="msg__avatar">
-          <AppLogo :size="16" />
-        </div>
-        <div class="msg__body">
-          <div class="msg__bubble msg__bubble--typing">
-            <span /><span /><span />
-          </div>
-        </div>
-      </article>
     </div>
   </div>
 
@@ -407,6 +404,25 @@ watch(activeId, () => {
 
 .msg__bubble--markdown {
   overflow-wrap: anywhere;
+}
+
+.msg__markdown-content {
+  display: contents;
+}
+
+.msg__bubble--streaming .msg__markdown-content :deep(p:last-child) {
+  display: inline;
+}
+
+.msg__typing-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.12em;
+  margin-left: 3px;
+  border-radius: 1px;
+  background: currentColor;
+  vertical-align: -0.16em;
+  animation: typing-caret 0.9s steps(1, end) infinite;
 }
 
 .msg__bubble--markdown :deep(*) {
@@ -676,6 +692,11 @@ watch(activeId, () => {
 @keyframes pulse {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.45; }
   30% { transform: translateY(-5px); opacity: 1; }
+}
+
+@keyframes typing-caret {
+  0%, 45% { opacity: 1; }
+  46%, 100% { opacity: 0; }
 }
 
 @media (max-width: 768px) {

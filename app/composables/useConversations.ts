@@ -32,6 +32,115 @@ const ACTIVE_CONVERSATION_KEY = 'magent-active-conversation-id'
 
 type ConversationsResponse = { data: ConversationPayload[] }
 type ConversationResponse = { data: ConversationPayload }
+type ChatStreamResult = {
+  title: string
+  failed?: boolean
+  todoCreated?: { id: number, title: string }
+  userMessage: ChatMessage
+  assistantMessage: ChatMessage
+}
+type RetryStreamResult = {
+  failed?: boolean
+  assistantMessage: ChatMessage
+}
+
+function getClientErrorMessage(error: unknown, fallback: string) {
+  const fetchError = error as {
+    data?: { statusMessage?: string, message?: string }
+    statusMessage?: string
+    message?: string
+  }
+
+  return fetchError.data?.statusMessage
+    || fetchError.data?.message
+    || fetchError.statusMessage
+    || fetchError.message
+    || fallback
+}
+
+async function readEventStream<T>(response: Response, handlers: {
+  onDelta?: (content: string) => void
+}) {
+  if (!response.ok) {
+    const text = await response.text()
+    let message = text
+    try {
+      const data = JSON.parse(text) as { statusMessage?: string, message?: string }
+      message = data.statusMessage || data.message || text
+    } catch {
+      // Keep the raw response text for non-JSON errors.
+    }
+    throw new Error(message || `请求失败 (${response.status})`)
+  }
+
+  if (!response.body) {
+    throw new Error('流式响应为空')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result: T | null = null
+
+  function consumeBlock(block: string) {
+    const lines = block.split(/\r?\n/)
+    const eventName = lines
+      .find(line => line.startsWith('event:'))
+      ?.slice(6)
+      .trim() || 'message'
+    const data = lines
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).trimStart())
+      .join('\n')
+      .trim()
+
+    if (!data) {
+      return
+    }
+
+    const payload = JSON.parse(data) as {
+      content?: string
+      message?: string
+    }
+
+    if (eventName === 'delta') {
+      handlers.onDelta?.(payload.content || '')
+      return
+    }
+
+    if (eventName === 'result') {
+      result = payload as T
+      return
+    }
+
+    if (eventName === 'error') {
+      throw new Error(payload.message || '流式请求失败')
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) {
+      break
+    }
+
+    buffer += decoder.decode(value, { stream: true })
+    const blocks = buffer.split(/\r?\n\r?\n/)
+    buffer = blocks.pop() || ''
+    blocks.forEach(consumeBlock)
+  }
+
+  buffer += decoder.decode()
+  if (buffer.trim()) {
+    consumeBlock(buffer)
+  }
+
+  if (!result) {
+    throw new Error('流式响应未返回最终结果')
+  }
+
+  return result
+}
 
 function extractConversations(payload: ConversationsResponse | ConversationPayload[] | null | undefined) {
   if (!payload) {
@@ -401,21 +510,37 @@ export function useConversations() {
       time: new Date().toISOString()
     }
     conversation.messages.push(optimisticUser)
+    const optimisticAssistantId = optimisticId - 1
+    const optimisticAssistant: ChatMessage = {
+      id: optimisticAssistantId,
+      role: 'assistant',
+      content: '',
+      status: 'pending',
+      error: null,
+      time: new Date().toISOString()
+    }
+    conversation.messages.push(optimisticAssistant)
     onScroll?.()
 
     try {
-      const result = await $fetch<{
-        title: string
-        failed?: boolean
-        todoCreated?: { id: number, title: string }
-        userMessage: ChatMessage
-        assistantMessage: ChatMessage
-      }>('/api/agent/chat', {
+      const response = await fetch('/api/agent/chat-stream', {
         method: 'POST',
         credentials: 'include',
-        body: {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
           message: content,
           conversationId: conversation.id
+        })
+      })
+      const result = await readEventStream<ChatStreamResult>(response, {
+        onDelta: (delta) => {
+          const assistant = conversation.messages.find(item => item.id === optimisticAssistantId)
+          if (assistant) {
+            assistant.content += delta
+          }
+          onScroll?.()
         }
       })
 
@@ -423,10 +548,9 @@ export function useConversations() {
         await refreshNuxtData('todos')
       }
 
-      const optimisticIndex = conversation.messages.findIndex(item => item.id === optimisticId)
-      if (optimisticIndex !== -1) {
-        conversation.messages.splice(optimisticIndex, 1)
-      }
+      conversation.messages = conversation.messages.filter(item =>
+        item.id !== optimisticId && item.id !== optimisticAssistantId
+      )
 
       applyChatResult(conversation.id, result.title, result.userMessage, result.assistantMessage)
       if (result.failed) {
@@ -434,13 +558,11 @@ export function useConversations() {
       }
       onScroll?.()
     } catch (error: unknown) {
-      const optimisticIndex = conversation.messages.findIndex(item => item.id === optimisticId)
-      if (optimisticIndex !== -1) {
-        conversation.messages.splice(optimisticIndex, 1)
-      }
+      conversation.messages = conversation.messages.filter(item =>
+        item.id !== optimisticId && item.id !== optimisticAssistantId
+      )
 
-      const fetchError = error as { data?: { statusMessage?: string }, statusMessage?: string }
-      ElMessage.error(fetchError.data?.statusMessage || fetchError.statusMessage || '发送失败')
+      ElMessage.error(getClientErrorMessage(error, '发送失败'))
       throw error
     } finally {
       sending.value = false
@@ -462,15 +584,19 @@ export function useConversations() {
     const previous = { ...message }
     message.status = 'pending'
     message.error = null
+    message.content = ''
     onScroll?.()
 
     try {
-      const result = await $fetch<{
-        failed?: boolean
-        assistantMessage: ChatMessage
-      }>(`/api/messages/${messageId}/retry`, {
+      const response = await fetch(`/api/messages/${messageId}/retry-stream`, {
         method: 'POST',
         credentials: 'include'
+      })
+      const result = await readEventStream<RetryStreamResult>(response, {
+        onDelta: (delta) => {
+          message.content += delta
+          onScroll?.()
+        }
       })
 
       applyMessageUpdate(conversation.id, result.assistantMessage)
@@ -480,8 +606,7 @@ export function useConversations() {
       onScroll?.()
     } catch (error: unknown) {
       applyMessageUpdate(conversation.id, previous)
-      const fetchError = error as { data?: { statusMessage?: string }, statusMessage?: string }
-      ElMessage.error(fetchError.data?.statusMessage || fetchError.statusMessage || '重试失败')
+      ElMessage.error(getClientErrorMessage(error, '重试失败'))
     } finally {
       retryingMessageId.value = null
     }

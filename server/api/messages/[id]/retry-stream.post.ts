@@ -6,7 +6,7 @@ import {
   updateAssistantMessageResult
 } from '../../../utils/chat'
 import { formatTodosForPrompt } from '../../../utils/todos'
-import { chatWithAi } from '../../../utils/ai'
+import { streamChatWithAi } from '../../../utils/ai'
 
 function getErrorMessage(error: unknown, fallback: string) {
   const fetchError = error as {
@@ -20,6 +20,30 @@ function getErrorMessage(error: unknown, fallback: string) {
     || fetchError.statusMessage
     || fetchError.message
     || fallback
+}
+
+function formatMessage(message: {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
+  status: 'pending' | 'completed' | 'failed'
+  error: string | null
+  created_at: string
+}) {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    status: message.status,
+    error: message.error,
+    time: message.created_at
+  }
+}
+
+function writeSse(event: NodeJS.WritableStream & { flush?: () => void }, type: string, payload: unknown) {
+  event.write(`event: ${type}\n`)
+  event.write(`data: ${JSON.stringify(payload)}\n\n`)
+  event.flush?.()
 }
 
 export default defineEventHandler(async (event) => {
@@ -50,6 +74,24 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  event.node.res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  })
+  event.node.res.flushHeaders?.()
+
+  let closed = false
+  event.node.req.on('close', () => {
+    closed = true
+  })
+  const send = (type: string, payload: unknown) => {
+    if (!closed) {
+      writeSse(event.node.res, type, payload)
+    }
+  }
+
   let reply = ''
   let status: 'completed' | 'failed' = 'completed'
   let errorMessage: string | null = null
@@ -63,7 +105,7 @@ export default defineEventHandler(async (event) => {
         }))
     )
 
-    reply = await chatWithAi({
+    reply = await streamChatWithAi({
       provider: config.aiProvider,
       zhipuApiKey: config.zhipuApiKey,
       zhipuModel: config.zhipuModel,
@@ -73,7 +115,10 @@ export default defineEventHandler(async (event) => {
       doubaoResponsesUrl: config.doubaoResponsesUrl,
       doubaoWebSearch: config.doubaoWebSearch,
       messages: history,
-      extraSystemContext: formatTodosForPrompt(user.id)
+      extraSystemContext: formatTodosForPrompt(user.id),
+      onDelta: (delta) => {
+        send('delta', { content: delta })
+      }
     })
   } catch (error: unknown) {
     status = 'failed'
@@ -88,15 +133,12 @@ export default defineEventHandler(async (event) => {
     error: errorMessage
   })
 
-  return {
+  send('result', {
     failed: status === 'failed',
-    assistantMessage: {
-      id: assistantMessage.id,
-      role: assistantMessage.role,
-      content: assistantMessage.content,
-      status: assistantMessage.status,
-      error: assistantMessage.error,
-      time: assistantMessage.created_at
-    }
+    assistantMessage: formatMessage(assistantMessage)
+  })
+
+  if (!closed) {
+    event.node.res.end()
   }
 })

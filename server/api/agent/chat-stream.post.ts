@@ -10,7 +10,7 @@ import {
   formatTodosForPrompt,
   tryParseTodoCommand
 } from '../../utils/todos'
-import { chatWithAi } from '../../utils/ai'
+import { streamChatWithAi } from '../../utils/ai'
 import { assertMaxLength, MAX_CHAT_MESSAGE_LENGTH, MAX_TODO_TITLE_LENGTH } from '../../utils/limits'
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -25,6 +25,30 @@ function getErrorMessage(error: unknown, fallback: string) {
     || fetchError.statusMessage
     || fetchError.message
     || fallback
+}
+
+function formatMessage(message: {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
+  status: 'pending' | 'completed' | 'failed'
+  error: string | null
+  created_at: string
+}) {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    status: message.status,
+    error: message.error,
+    time: message.created_at
+  }
+}
+
+function writeSse(event: NodeJS.WritableStream & { flush?: () => void }, type: string, payload: unknown) {
+  event.write(`event: ${type}\n`)
+  event.write(`data: ${JSON.stringify(payload)}\n\n`)
+  event.flush?.()
 }
 
 export default defineEventHandler(async (event) => {
@@ -58,12 +82,30 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  event.node.res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  })
+  event.node.res.flushHeaders?.()
+
+  let closed = false
+  event.node.req.on('close', () => {
+    closed = true
+  })
+  const send = (type: string, payload: unknown) => {
+    if (!closed) {
+      writeSse(event.node.res, type, payload)
+    }
+  }
+
   let title = conversation.title
   if (shouldAutoRenameTitle(conversation.title)) {
     title = message.slice(0, 18) + (message.length > 18 ? '…' : '')
   }
 
-  let reply: string
+  let reply = ''
   let assistantStatus: 'completed' | 'failed' = 'completed'
   let assistantError: string | null = null
   let todoCreated: { id: number, title: string } | undefined
@@ -74,6 +116,7 @@ export default defineEventHandler(async (event) => {
     const todo = createTodoForUser(user.id, todoCommand.title)
     todoCreated = { id: todo.id, title: todo.title }
     reply = `已添加待办「${todo.title}」。你可以在左侧「待办」页面查看和管理。`
+    send('delta', { content: reply })
   } else {
     try {
       const modelMessages = getCompletedMessagesForModel(conversationId)
@@ -85,7 +128,7 @@ export default defineEventHandler(async (event) => {
         { role: 'user' as const, content: message }
       ])
 
-      reply = await chatWithAi({
+      reply = await streamChatWithAi({
         provider: config.aiProvider,
         zhipuApiKey: config.zhipuApiKey,
         zhipuModel: config.zhipuModel,
@@ -95,7 +138,10 @@ export default defineEventHandler(async (event) => {
         doubaoResponsesUrl: config.doubaoResponsesUrl,
         doubaoWebSearch: config.doubaoWebSearch,
         messages: history,
-        extraSystemContext: formatTodosForPrompt(user.id)
+        extraSystemContext: formatTodosForPrompt(user.id),
+        onDelta: (delta) => {
+          send('delta', { content: delta })
+        }
       })
     } catch (error: unknown) {
       reply = ''
@@ -113,25 +159,15 @@ export default defineEventHandler(async (event) => {
     title: title === conversation.title ? undefined : title
   })
 
-  return {
+  send('result', {
     title,
     todoCreated,
     failed: assistantStatus === 'failed',
-    userMessage: {
-      id: userMessage.id,
-      role: userMessage.role,
-      content: userMessage.content,
-      status: userMessage.status,
-      error: userMessage.error,
-      time: userMessage.created_at
-    },
-    assistantMessage: {
-      id: assistantMessage.id,
-      role: assistantMessage.role,
-      content: assistantMessage.content,
-      status: assistantMessage.status,
-      error: assistantMessage.error,
-      time: assistantMessage.created_at
-    }
+    userMessage: formatMessage(userMessage),
+    assistantMessage: formatMessage(assistantMessage)
+  })
+
+  if (!closed) {
+    event.node.res.end()
   }
 })
