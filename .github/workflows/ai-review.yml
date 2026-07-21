@@ -33,8 +33,9 @@ jobs:
       # 调你的 Agent
       - name: Call AI Reviewer
         env:
-          REVIEW_ENDPOINT: https://chewable-helpful-sleeve.ngrok-free.dev
+          REVIEW_ENDPOINT: https://chewable-helpful-sleeve.ngrok-free.dev/api/reviews/github-actions
           REVIEW_WEBHOOK_TOKEN: ${{ secrets.AI_REVIEW_WEBHOOK_TOKEN }}
+          REVIEW_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -48,30 +49,14 @@ jobs:
             -X POST "$REVIEW_ENDPOINT" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${REVIEW_WEBHOOK_TOKEN}" \
+            -H "X-GitHub-Token: ${REVIEW_GITHUB_TOKEN}" \
             -H "X-GitHub-Event: $GITHUB_EVENT_NAME" \
             -d @- <<'JSON'
           {
-            "repository": ${{ toJson(github.repository) }},
-            "repository_owner": ${{ toJson(github.repository_owner) }},
-            "pull_request": {
-              "number": ${{ github.event.pull_request.number }},
-              "title": ${{ toJson(github.event.pull_request.title) }},
-              "html_url": ${{ toJson(github.event.pull_request.html_url) }},
-              "base_ref": ${{ toJson(github.event.pull_request.base.ref) }},
-              "base_sha": ${{ toJson(github.event.pull_request.base.sha) }},
-              "head_ref": ${{ toJson(github.event.pull_request.head.ref) }},
-              "head_sha": ${{ toJson(github.event.pull_request.head.sha) }},
-              "author": ${{ toJson(github.event.pull_request.user.login) }}
-            },
-            "event": {
-              "name": ${{ toJson(github.event_name) }},
-              "action": ${{ toJson(github.event.action) }},
-              "run_id": ${{ github.run_id }},
-              "run_attempt": ${{ github.run_attempt }}
-            },
-            "github": {
-              "api_url": ${{ toJson(github.api_url) }},
-              "server_url": ${{ toJson(github.server_url) }}
-            }
+            "owner": ${{ toJson(github.repository_owner) }},
+            "repo": ${{ toJson(github.event.repository.name) }},
+            "pull_number": ${{ github.event.pull_request.number }},
+            "head_sha": ${{ toJson(github.event.pull_request.head.sha) }},
+            "dry_run": false
           }
           JSON
