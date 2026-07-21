@@ -1,7 +1,7 @@
 name: AI Code Review
 
 on:
-  pull_request_target:
+  pull_request:
     types:
       - opened
       - synchronize
@@ -38,7 +38,7 @@ jobs:
 
           REVIEW_AGENT_URL="${REVIEW_AGENT_URL%/}"
 
-          curl --fail-with-body \
+          response="$(curl --fail-with-body \
             --show-error \
             --silent \
             --location \
@@ -59,3 +59,6 @@ jobs:
             "dry_run": false
           }
           JSON
+          )"
+
+          echo "$response"
