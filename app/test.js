@@ -12,5 +12,6 @@ const topUser = getTopUser(users)
 
 console.log('Test script is running...')
 console.log(`Top user: ${topUser.name}, score: ${topUser.score}`)
+console.log('test.... jius')
 
 export { getTopUser }
