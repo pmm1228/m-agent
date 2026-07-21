@@ -38,13 +38,16 @@ jobs:
 
           REVIEW_AGENT_URL="${REVIEW_AGENT_URL%/}"
 
-          response="$(curl --fail-with-body \
+          response_file="$(mktemp)"
+          http_code="$(curl \
             --show-error \
             --silent \
             --location \
             --max-time 300 \
             --retry 2 \
             --retry-delay 5 \
+            --output "$response_file" \
+            --write-out "%{http_code}" \
             -X POST "$REVIEW_AGENT_URL/api/reviews/github-actions" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${REVIEW_WEBHOOK_TOKEN}" \
@@ -61,4 +64,9 @@ jobs:
           JSON
           )"
 
-          echo "$response"
+          echo "AI reviewer HTTP status: $http_code"
+          cat "$response_file"
+
+          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            exit 1
+          fi
