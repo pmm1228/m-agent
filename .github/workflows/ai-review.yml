@@ -1,11 +1,12 @@
 name: AI Code Review
 
 on:
-  pull_request:
+  pull_request_target:
     types:
       - opened
       - synchronize
       - reopened
+      - ready_for_review
 
 permissions:
   contents: read
@@ -18,26 +19,24 @@ concurrency:
 
 jobs:
   review:
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
 
     timeout-minutes: 10
 
     steps:
-      # 拉代码
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
       # 调你的 Agent
       - name: Call AI Reviewer
         env:
-          REVIEW_ENDPOINT: https://chewable-helpful-sleeve.ngrok-free.dev/api/reviews/github-actions
-          REVIEW_WEBHOOK_TOKEN: ${{ secrets.AI_REVIEW_WEBHOOK_TOKEN }}
+          REVIEW_AGENT_URL: ${{ secrets.CODE_REVIEW_AGENT_URL }}
+          REVIEW_WEBHOOK_TOKEN: ${{ secrets.CODE_REVIEW_AGENT_SECRET }}
           REVIEW_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          : "${REVIEW_AGENT_URL:?Missing CODE_REVIEW_AGENT_URL secret}"
+          : "${REVIEW_WEBHOOK_TOKEN:?Missing CODE_REVIEW_AGENT_SECRET secret}"
+
+          REVIEW_AGENT_URL="${REVIEW_AGENT_URL%/}"
 
           curl --fail-with-body \
             --show-error \
@@ -46,7 +45,7 @@ jobs:
             --max-time 300 \
             --retry 2 \
             --retry-delay 5 \
-            -X POST "$REVIEW_ENDPOINT" \
+            -X POST "$REVIEW_AGENT_URL/api/reviews/github-actions" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${REVIEW_WEBHOOK_TOKEN}" \
             -H "X-GitHub-Token: ${REVIEW_GITHUB_TOKEN}" \
