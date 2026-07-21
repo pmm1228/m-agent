@@ -122,6 +122,7 @@ export function formatTodosForPrompt(userId: number) {
 }
 
 export function tryParseTodoCommand(message: string) {
+  const trimmed = message.trim()
   const patterns = [
     /^(?:请|帮我|帮忙)?(?:把|将)?[「"'](.+?)[」"']?(?:加入|加到|添加到|写进)(?:待办|todo|任务)$/i,
     /^(?:请|帮我|帮忙)?(?:把|将)(.+?)(?:加入|加到|添加到|写进)(?:待办|todo|任务)$/i,
@@ -129,7 +130,7 @@ export function tryParseTodoCommand(message: string) {
   ]
 
   for (const pattern of patterns) {
-    const match = message.match(pattern)
+    const match = trimmed.match(pattern)
     const title = match?.[1]?.trim()
     if (title) {
       return { action: 'create' as const, title }

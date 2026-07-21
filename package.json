@@ -7,7 +7,10 @@
     "dev": "TMPDIR=/tmp nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
-    "postinstall": "nuxt prepare"
+    "postinstall": "nuxt prepare",
+    "test": "npx vitest run",
+    "test:watch": "npx vitest",
+    "test:coverage": "npx vitest run --coverage"
   },
   "dependencies": {
     "@types/markdown-it": "^14.1.2",
@@ -21,6 +24,11 @@
   },
   "devDependencies": {
     "@element-plus/nuxt": "^1.1.5",
-    "@types/better-sqlite3": "^7.6.13"
+    "@nuxt/test-utils": "^4.0.3",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^26.1.0",
+    "@vue/test-utils": "^2.4.11",
+    "happy-dom": "^20.10.6",
+    "vitest": "^4.1.9"
   }
 }

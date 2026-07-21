@@ -58,6 +58,19 @@ function getClientErrorMessage(error: unknown, fallback: string) {
     || fallback
 }
 
+function getClientErrorStatus(error: unknown) {
+  const fetchError = error as {
+    data?: { statusCode?: number }
+    status?: number
+    statusCode?: number
+  }
+
+  return fetchError.data?.statusCode
+    || fetchError.statusCode
+    || fetchError.status
+    || 0
+}
+
 async function readEventStream<T>(response: Response, handlers: {
   onDelta?: (content: string) => void
 }) {
@@ -273,8 +286,30 @@ export function useConversations() {
       })
       return mergeConversationPayload(data)
     } catch (error: unknown) {
-      const fetchError = error as { data?: { statusMessage?: string }, statusMessage?: string }
-      ElMessage.error(fetchError.data?.statusMessage || fetchError.statusMessage || '加载消息失败')
+      if (getClientErrorStatus(error) === 404) {
+        const index = conversations.value.findIndex(item => item.id === id)
+        if (index !== -1) {
+          conversations.value.splice(index, 1)
+        }
+
+        if (activeId.value === id) {
+          activeId.value = conversations.value[0]?.id ?? null
+          if (import.meta.client) {
+            if (activeId.value) {
+              sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, String(activeId.value))
+            } else {
+              sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY)
+            }
+          }
+          if (activeId.value) {
+            await loadConversationMessages(activeId.value)
+          }
+        }
+
+        ElMessage.warning('这个对话已不存在，已切换到可用对话')
+      } else {
+        ElMessage.error(getClientErrorMessage(error, '加载消息失败'))
+      }
       return existing
     } finally {
       if (loadingMessagesId.value === id) {
